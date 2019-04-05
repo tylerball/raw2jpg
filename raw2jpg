@@ -1,0 +1,64 @@
+#!/usr/bin/env ruby
+require 'open3'
+require 'optparse'
+require 'byebug'
+require 'tmpdir'
+require 'fileutils'
+
+options = {
+  formats: ['raf', 'nef', 'cr2'],
+}
+OptionParser.new do |opts|
+  opts.banner = "Usage: rawjpg [options] [directories]"
+
+  opts.on("-e", "--extensions [FORMATS]", Array, "Extensions to search, comma seperated (default 'raf,nef,cr2')") do |value|
+    options[:formats] = value
+  end
+  opts.on("-v", "--[no-]verbose", "Run verbosely") do |value|
+    options[:verbose] = value
+  end
+  opts.on("-f", "--force-overwrite", "Only overwrite jpgs when raw file has camera raw adjustments TODO") do |value|
+    options[:force] = value
+  end
+  opts.on("-h", "--help", "Prints this help") do
+    puts opts
+    exit
+  end
+end.parse!
+
+tmpdir = Dir.mktmpdir
+dirs = ARGV.first.split(',')
+dirs.each do |dir|
+  glob = "/**/*.{#{options[:formats].join(',')}}"
+  files = Dir.glob(File.join(dir, glob))
+
+  files.select! do |file|
+    base = file.gsub(File.extname(file), '')
+    !File.exist?("#{base}.jpg")
+  end unless options[:force]
+
+  total = files.size
+  files.each_with_index do |file, i|
+    base = file.gsub(File.extname(file), '')
+    count = i + 1
+    puts "#{' ' * (total.to_s.size - count.to_s.size)}#{count}/#{total} converting #{file}"
+    sidecar = "#{base}.xmp"
+    if File.exist?(sidecar)
+      input = if File.read(sidecar).include?('crs:ProcessVersion') and options[:force]
+        puts "converting to DNG with Camera Raw Adjustments"
+        out, _ = Open3.capture2("/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter",
+                                '--args', '-p2', "-d #{File.dirname(base)}", file)
+        puts out if options[:verbose]
+        "#{base}.dng"
+      else
+        file unless[:force]
+      end
+    end
+    next unless input
+    out, _ = Open3.capture2("sips -s format jpeg '#{input}' --out '#{base}.jpg'")
+    FileUtils.rm(input) if input.include?('.dng')
+  end
+end
+
+class Processor
+end
