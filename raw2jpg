@@ -1,15 +1,16 @@
 #!/usr/bin/env ruby
 require 'open3'
 require 'optparse'
-require 'byebug'
 require 'tmpdir'
 require 'fileutils'
+require 'shellwords'
+require 'byebug' if ENV['DEBUG']
 
 options = {
   formats: ['raf', 'nef', 'cr2'],
 }
 OptionParser.new do |opts|
-  opts.banner = "Usage: rawjpg [options] [directories]"
+  opts.banner = "Usage: raw2jpg [options] [directories]"
 
   opts.on("-e", "--extensions [FORMATS]", Array, "Extensions to search, comma seperated (default 'raf,nef,cr2')") do |value|
     options[:formats] = value
@@ -17,7 +18,10 @@ OptionParser.new do |opts|
   opts.on("-v", "--[no-]verbose", "Run verbosely") do |value|
     options[:verbose] = value
   end
-  opts.on("-f", "--force-overwrite", "Only overwrite jpgs when raw file has camera raw adjustments TODO") do |value|
+  opts.on("-c", "--[no-]cra", "Overwrite jpgs when raw file has Camera Raw adjustments") do |value|
+    options[:cra] = value
+  end
+  opts.on("-f", "--force", "Overwrite existing jpgs") do |value|
     options[:force] = value
   end
   opts.on("-h", "--help", "Prints this help") do
@@ -26,39 +30,81 @@ OptionParser.new do |opts|
   end
 end.parse!
 
-tmpdir = Dir.mktmpdir
-dirs = ARGV.first.split(',')
-dirs.each do |dir|
-  glob = "/**/*.{#{options[:formats].join(',')}}"
-  files = Dir.glob(File.join(dir, glob))
+class Processor
+  attr_accessor :file
 
-  files.select! do |file|
-    base = file.gsub(File.extname(file), '')
-    !File.exist?("#{base}.jpg")
-  end unless options[:force]
+  def initialize(file, options)
+    @file = file
+    @options = options
+  end
 
-  total = files.size
-  files.each_with_index do |file, i|
-    base = file.gsub(File.extname(file), '')
-    count = i + 1
-    puts "#{' ' * (total.to_s.size - count.to_s.size)}#{count}/#{total} converting #{file}"
-    sidecar = "#{base}.xmp"
-    if File.exist?(sidecar)
-      input = if File.read(sidecar).include?('crs:ProcessVersion') and options[:force]
-        puts "converting to DNG with Camera Raw Adjustments"
-        out, _ = Open3.capture2("/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter",
-                                '--args', '-p2', "-d #{File.dirname(base)}", file)
-        puts out if options[:verbose]
-        "#{base}.dng"
-      else
-        file unless[:force]
-      end
+  def should_process?
+    return true if @options[:cra] and has_cra?
+    return true if File.exist?(output) and @options[:force]
+    return false if File.exist?(output)
+    true
+  end
+
+  def process
+    if has_cra?
+      puts "converting to DNG with Camera Raw Adjustments"
+      outdir = Shellwords.escape(File.dirname(base))
+      out, _ = Open3.capture2("/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter",
+                              '--args',
+                              '-p2',
+                              "-d #{outdir}",
+                              @file)
+      puts out if @options[:verbose]
+      rotation, _ = Open3.capture2("exiftool -Orientation# \"#{base}.dng\"")
+      rotation.gsub!(/^.*: /, '').gsub!("\n", '')
+      out, _ = Open3.capture2("exiftool -b -JpgFromRaw \"#{base}.dng\" > \"#{base}.jpg\"")
+      Open3.capture2("exiftool -Orientation#=\"#{rotation}\" \"#{base}.jpg\" -overwrite_original_in_place")
+      FileUtils.rm("#{base}.dng")
+    else
+      out, _ = Open3.capture2("sips -s format jpeg \"#{@file}\" --out \"#{base}.jpg\"")
     end
-    next unless input
-    out, _ = Open3.capture2("sips -s format jpeg '#{input}' --out '#{base}.jpg'")
-    FileUtils.rm(input) if input.include?('.dng')
+  end
+
+  def output
+    @output ||= "#{base}.jpg"
+  end
+
+  def has_cra?
+    fname = "#{base}.xmp"
+    @has_cra ||= begin
+      return false unless File.exist?(fname)
+      File.read(fname).include?('crs:ProcessVersion')
+    end
+  end
+
+  def base
+    @base ||= @file.gsub(File.extname(@file), '')
   end
 end
 
-class Processor
+dirs = ARGV.first.split(',')
+puts "Finding raw files..."
+files = dirs.map do |dir|
+  glob = "/**/*.{#{options[:formats].join(',')}}"
+  files = Dir.glob(File.join(dir, glob), File::FNM_CASEFOLD)
+
+  files.map! do |file|
+    Processor.new(file, options)
+  end.select! do |p|
+    p.should_process?
+  end
+  files
+end.flatten!
+
+if files.empty?
+  puts "No files found."
+  exit
+end
+
+total = files.size
+puts "#{total} files to process"
+files.each_with_index do |processor, i|
+  count = i + 1
+  puts "#{' ' * (total.to_s.size - count.to_s.size)}#{count}/#{total} converting #{processor.file}"
+  processor.process
 end
