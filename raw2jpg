@@ -9,6 +9,7 @@ require 'byebug' if ENV['DEBUG']
 options = {
   formats: ['raf', 'nef', 'cr2'],
 }
+
 OptionParser.new do |opts|
   opts.banner = "Usage: raw2jpg [options] [directories]"
 
@@ -30,6 +31,52 @@ OptionParser.new do |opts|
   end
 end.parse!
 
+class Step
+  def initialize(input, output = nil)
+    @input = input
+    @output = output
+  end
+end
+
+class ConvertWithCRA < Step
+  def do
+    puts "converting to DNG with Camera Raw Adjustments"
+    out, _ = Open3.capture2("/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter",
+                            '--args',
+                            '-p2',
+                            "-d #{@output}",
+                            @input)
+    out
+  end
+end
+
+class ConvertExifTool < Step
+  def do
+    out = ''
+    orientation, _ = Open3.capture2("exiftool -Orientation# \"#{@input}\"")
+    out << orientation
+    orientation.gsub!(/^.*: /, '').gsub!("\n", '')
+    convert, _ = Open3.capture2("exiftool -b -JpgFromRaw \"#{@input}\" > \"#{@output}\"")
+    out << convert
+    write_orientation, _ = Open3.capture2("exiftool -Orientation#=\"#{orientation}\" \"#{@output}\" -overwrite_original_in_place")
+    out << write_orientation
+    out
+  end
+end
+
+class ConvertSips < Step
+  def do
+    out, _ = Open3.capture2("sips -s format jpeg \"#{@input}\" --out \"#{@output}\"")
+    out
+  end
+end
+
+class CleanupDNG < Step
+  def do
+    FileUtils.rm(@input)
+  end
+end
+
 class Processor
   attr_accessor :file
 
@@ -46,22 +93,18 @@ class Processor
   end
 
   def process
+    steps = []
     if has_cra?
-      puts "converting to DNG with Camera Raw Adjustments"
-      outdir = Shellwords.escape(File.dirname(base))
-      out, _ = Open3.capture2("/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter",
-                              '--args',
-                              '-p2',
-                              "-d #{outdir}",
-                              @file)
-      puts out if @options[:verbose]
-      rotation, _ = Open3.capture2("exiftool -Orientation# \"#{base}.dng\"")
-      rotation.gsub!(/^.*: /, '').gsub!("\n", '')
-      out, _ = Open3.capture2("exiftool -b -JpgFromRaw \"#{base}.dng\" > \"#{base}.jpg\"")
-      Open3.capture2("exiftool -Orientation#=\"#{rotation}\" \"#{base}.jpg\" -overwrite_original_in_place")
-      FileUtils.rm("#{base}.dng")
+      steps << ConvertWithCRA.new(@file , Shellwords.escape(File.dirname(base)))
+      steps << ConvertExifTool.new("#{base}.dng", "#{base}.jpg")
+      steps << CleanupDNG.new("#{base}.dng")
     else
-      out, _ = Open3.capture2("sips -s format jpeg \"#{@file}\" --out \"#{base}.jpg\"")
+      steps << ConvertSips.new(@file, "#{base}.jpg")
+    end
+
+    steps.each do |step|
+      out = step.do
+      puts out if @options[:verbose]
     end
   end
 
