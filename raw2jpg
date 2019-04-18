@@ -10,7 +10,7 @@ options = {
   formats: ['raf', 'nef', 'cr2'],
 }
 
-OptionParser.new do |opts|
+opts = OptionParser.new do |opts|
   opts.banner = "Usage: raw2jpg [options] [directories]"
 
   opts.on("-e", "--extensions [FORMATS]", Array, "Extensions to search, comma seperated (default 'raf,nef,cr2')") do |value|
@@ -123,6 +123,11 @@ class Processor
   def base
     @base ||= @file.gsub(File.extname(@file), '')
   end
+end
+
+if ARGV.empty?
+  puts opts.options.help
+  exit
 end
 
 dirs = ARGV.first.split(',')
