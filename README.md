@@ -1,6 +1,6 @@
 # raw2jpg
 
-Script to convert RAW photos to JPG with Camera Raw/Lightroom adjustments applied.
+Script to convert RAW photos to JPG with Camera Raw/Lightroom adjustments applied. Mac OS only and requires [homebrew](https://brew.sh)
 
 ## install
 
@@ -13,7 +13,7 @@ curl -Lk https://raw.githubusercontent.com/tylerball/raw2jpg/master/raw2jpg > /u
 ## usage
 
 ```
-Usage: rawjpg [options] [directories]
+Usage: raw2jpg [options] [directories]
     -e, --extensions [FORMATS]       Extensions to search, comma seperated (default 'raf,nef,cr2')
     -v, --[no-]verbose               Run verbosely
     -c, --[no-]cra                   Overwrite jpgs when raw file has Camera Raw adjustments
